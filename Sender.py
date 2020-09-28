@@ -19,7 +19,7 @@ WINDOW_SIZE = 4
 # You can use some shared resources over the two threads
 base = 0
 mutex = _thread.allocate_lock()
-# timer = Timer(TIMEOUT_INTERVAL)
+timer = Timer(TIMEOUT_INTERVAL)
 
 # Need to have two threads: one for sending and another for receiving ACKs
 
@@ -29,7 +29,6 @@ def generate_payload(length=10):
     result_str = ''.join(random.choice(letters) for i in range(length))
 
     return result_str
-
 
 # Send using Stop_n_wait protocol
 def send_snw(sock):
@@ -52,6 +51,9 @@ def send_gbn(sock):
     # [nextseqnum, base+N-1] corresponds to packets than can be sent immediately
     # [base + N, ->] corresponds to packets that can't be sent until packed @ base is ACK'd
     # [0, (2 ** k) - 1] corresponds to range of sequence numbers
+    global base
+    global timer
+    global mutex
 
     # We get payload as a byte array
     try:
@@ -60,10 +62,13 @@ def send_gbn(sock):
         print("File to send was not found. Data transfer terminated.")
         return
 
-    # We then convert payload into a queue of packets and initialize needed variables
+    # We then convert payload into a queue of packets and initialize our seq_num pointer
     packet_queue = package_payload(payload)
     nextseqnum = 0
-    timer = Timer(TIMEOUT_INTERVAL)
+
+    # Begin thread listening for ACKs
+    _thread.start_new_thread(receive_gbn, (sock,))
+    print("Sending File...")
 
     # Send packets while there are packets to send
     while base < len(packet_queue) - 1:
@@ -72,14 +77,18 @@ def send_gbn(sock):
         if nextseqnum < base + WINDOW_SIZE:
             udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
             
-            # Begin timer if current packet is base packe
+            # Begin timer if current packet is base packet
             if base == nextseqnum:
                 timer.start()
-
             nextseqnum += 1
-        
-                
 
+        if timer.timeout():
+            nextseqnum = base
+
+    base = -1
+
+    print("File sent successfully.")
+    return
 
 # Reads file in working directory as bytes
 def read_file():
@@ -122,25 +131,35 @@ def receive_snw(sock, pkt):
 
 # Receive thread for GBN
 def receive_gbn(sock):
-    # This queue will keep track of all ACKs received
-    ack_queue = []
+    global base
+    global timer
+    global mutex
 
-    while True:
-        packet, addr = udt.recv(sock)
+    acks = []
+
+    while base > -1:
+        rpacket, addr = udt.recv(sock)
         
         # Make sure packet is from receiver
         if addr == RECEIVER_ADDR:
-            ack_queue.append(packet)
-
-            # If base is currently at this packet, then we increment base. Otherwise,
-            # we simply wait until we get the packet we need.
-            if base == len(ack_queue) - 1:
-                mutex.acquire()
-                try:
-                    base += 1
-                finally:
-                    mutex.release()
+            seq_num = packet.extract(rpacket)
             
+            # If we have not acked a packet before, then add to acks. Otherwise ignore.
+            if seq_num not in acks:
+                acks.append(seq_num[0])
+
+        # If base packet is acked, then we increment base and begin timer for new base.
+        if base + 1 in acks:
+            acks.remove()  
+            mutex.acquire()
+
+            try:
+                base += 1
+                timer.stop()
+                timer.start()
+            finally:
+                mutex.release()
+    
     return
 
 # Main function
@@ -158,5 +177,3 @@ if __name__ == '__main__':
     # # filename = sys.argv[1]
     # send_snw(sock)
     # sock.close()
-
-
