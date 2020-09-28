@@ -54,28 +54,31 @@ def send_gbn(sock):
     # [0, (2 ** k) - 1] corresponds to range of sequence numbers
 
     # We get payload as a byte array
-    payload = read_file()
-
-    if payload is None:
-        raise FileNotFoundError("File not found in working directory!")
+    try:
+        payload = read_file()
+    except FileNotFoundError:
+        print("File to send was not found. Data transfer terminated.")
         return
 
-    # We then convert payload into a stack of packets
-    packet_stack = package_payload(payload)
-    
+    # We then convert payload into a queue of packets
+    packet_queue = package_payload(payload)
+
+    while len(packet_queue) > 0:
+        
     return
 
+# Reads file in working directory as bytes
 def read_file():
-    #3,460 b?
     filename = input("Enter the filename of the document you wish to send: ")
 
     try:
         with open(filename, 'rb') as f:
             return f.read()
     except OSError as e:
-        print(e)
-        return None
+        raise FileNotFoundError(e)
 
+# Given a payload, it returns the payload as a stack of packets ready to send using a
+# framed mechanism
 def package_payload(payload):
     # We split up the payload into packets with packet size, while keeping track of the
     # sequence number and the data to turn into a packet
