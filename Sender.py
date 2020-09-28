@@ -56,11 +56,13 @@ def send_gbn(sock):
     # We get payload as a byte array
     payload = read_file()
 
+    if payload is None:
+        raise FileNotFoundError("File not found in working directory!")
+        return
+
     # We then convert payload into a stack of packets
     packet_stack = package_payload(payload)
-
-    print(len(packet_stack))
-
+    
     return
 
 def read_file():
@@ -71,7 +73,7 @@ def read_file():
         with open(filename, 'rb') as f:
             return f.read()
     except OSError as e:
-        print("File not found in working directory!\n" + e)
+        print(e)
         return None
 
 def package_payload(payload):
@@ -96,7 +98,6 @@ def package_payload(payload):
 
     return packets
 
-
 # Receive thread for stop-n-wait
 def receive_snw(sock, pkt):
     # Fill here to handle acks
@@ -106,7 +107,6 @@ def receive_snw(sock, pkt):
 def receive_gbn(sock):
     # Fill here to handle acks
     return
-
 
 # Main function
 if __name__ == '__main__':
