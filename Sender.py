@@ -17,8 +17,8 @@ TIMEOUT_INTERVAL = 0.5
 WINDOW_SIZE = 4
 
 # You can use some shared resources over the two threads
-# base = 0
-# mutex = _thread.allocate_lock()
+base = 0
+mutex = _thread.allocate_lock()
 # timer = Timer(TIMEOUT_INTERVAL)
 
 # Need to have two threads: one for sending and another for receiving ACKs
@@ -60,12 +60,26 @@ def send_gbn(sock):
         print("File to send was not found. Data transfer terminated.")
         return
 
-    # We then convert payload into a queue of packets
+    # We then convert payload into a queue of packets and initialize needed variables
     packet_queue = package_payload(payload)
+    nextseqnum = 0
+    timer = Timer(TIMEOUT_INTERVAL)
 
-    while len(packet_queue) > 0:
+    # Send packets while there are packets to send
+    while base < len(packet_queue) - 1:
+       
+        # If our window is not yet at its maximum size, send packets
+        if nextseqnum < base + WINDOW_SIZE:
+            udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
+            
+            # Begin timer if current packet is base packe
+            if base == nextseqnum:
+                timer.start()
+
+            nextseqnum += 1
         
-    return
+                
+
 
 # Reads file in working directory as bytes
 def read_file():
@@ -90,7 +104,7 @@ def package_payload(payload):
         if (i + 1) % PACKET_SIZE == 0:
             packets.append(packet.make(seq_num, bytes(packet_data)))
             packet_data = []
-            seq_num = i + 1
+            seq_num += 1
         else:
             packet_data.append(payload[i])
 
@@ -108,7 +122,25 @@ def receive_snw(sock, pkt):
 
 # Receive thread for GBN
 def receive_gbn(sock):
-    # Fill here to handle acks
+    # This queue will keep track of all ACKs received
+    ack_queue = []
+
+    while True:
+        packet, addr = udt.recv(sock)
+        
+        # Make sure packet is from receiver
+        if addr == RECEIVER_ADDR:
+            ack_queue.append(packet)
+
+            # If base is currently at this packet, then we increment base. Otherwise,
+            # we simply wait until we get the packet we need.
+            if base == len(ack_queue) - 1:
+                mutex.acquire()
+                try:
+                    base += 1
+                finally:
+                    mutex.release()
+            
     return
 
 # Main function
