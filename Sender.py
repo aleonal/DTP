@@ -10,8 +10,8 @@ from timer import Timer
 
 # Some already defined parameters
 PACKET_SIZE = 512
-RECEIVER_ADDR = ('localhost', 8080)
-SENDER_ADDR = ('localhost', 9090)
+RECEIVER_ADDR = ('127.0.0.1', 8080)
+SENDER_ADDR = ('127.0.0.1', 9090)
 SLEEP_INTERVAL = 0.05 # (In seconds)
 TIMEOUT_INTERVAL = 0.5
 WINDOW_SIZE = 4
@@ -66,26 +66,36 @@ def send_gbn(sock):
     packet_queue = package_payload(payload)
     nextseqnum = 0
 
-    # Begin thread listening for ACKs
-    _thread.start_new_thread(receive_gbn, (sock,))
-    print("Sending File...")
-
     # Send packets while there are packets to send
-    while base < len(packet_queue) - 1:
-       
-        # If our window is not yet at its maximum size, send packets
-        if nextseqnum < base + WINDOW_SIZE:
-            udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
-            
-            # Begin timer if current packet is base packet
-            if base == nextseqnum:
-                timer.start()
-            nextseqnum += 1
+    while base < len(packet_queue):  
+        reset = False
 
         if timer.timeout():
             nextseqnum = base
+            timer.stop()
+            reset = True
 
-    base = -1
+        if nextseqnum < base + WINDOW_SIZE and nextseqnum < len(packet_queue):
+            print("Base {}. Sending {}".format(base, nextseqnum))
+            
+            udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
+
+            if nextseqnum == base or reset:
+                timer.start()
+                reset = False
+            
+            nextseqnum += 1
+
+    # Signals recieving thread to stop
+    mutex.acquire()
+    try:
+        base = -1
+    finally:
+        mutex.release()
+
+    # Send packet with FIN to signal end of transmission to receiver
+    time.sleep(SLEEP_INTERVAL * 10)
+    udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
 
     print("File sent successfully.")
     return
@@ -107,7 +117,7 @@ def package_payload(payload):
     # sequence number and the data to turn into a packet
     packets = []
     packet_data = []
-    seq_num = 1
+    seq_num = 0
 
     for i in range(len(payload)):
         if (i + 1) % PACKET_SIZE == 0:
@@ -138,21 +148,23 @@ def receive_gbn(sock):
     acks = []
 
     while base > -1:
-        rpacket, addr = udt.recv(sock)
-        
+        # If timer for current base times out, request packets starting from base again
+        p, addr = udt.recv(sock)
+
         # Make sure packet is from receiver
         if addr == RECEIVER_ADDR:
-            seq_num = packet.extract(rpacket)
+            seq_num, payload = packet.extract(p)
+            
+            print("Expecting {}. Received {}".format(base, seq_num))
             
             # If we have not acked a packet before, then add to acks. Otherwise ignore.
-            if seq_num not in acks:
-                acks.append(seq_num[0])
+            if (seq_num not in acks) and payload.decode() == 'ACK':
+                acks.append(seq_num)
 
         # If base packet is acked, then we increment base and begin timer for new base.
-        if base + 1 in acks:
-            acks.remove()  
+        if base in acks:
+            # print("Moving base {}\n".format(base))
             mutex.acquire()
-
             try:
                 base += 1
                 timer.stop()
@@ -171,6 +183,9 @@ if __name__ == '__main__':
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(SENDER_ADDR)
 
+    # Begin thread listening for ACKs
+    _thread.start_new_thread(receive_gbn, (sock,))
+    
     send_gbn(sock)
     sock.close()
 
