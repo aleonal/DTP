@@ -1,6 +1,6 @@
 import socket
 import sys
-# import _thread
+import _thread
 import time
 import string
 import packet
@@ -47,8 +47,55 @@ def send_snw(sock):
 
 # Send using GBN protocol
 def send_gbn(sock):
+    # [0, base-1] corresponds to packets already ACK'd
+    # [base, nextseqnum-1] corresponds to packets sent, not ACK'd
+    # [nextseqnum, base+N-1] corresponds to packets than can be sent immediately
+    # [base + N, ->] corresponds to packets that can't be sent until packed @ base is ACK'd
+    # [0, (2 ** k) - 1] corresponds to range of sequence numbers
+
+    # We get payload as a byte array
+    payload = read_file()
+
+    # We then convert payload into a stack of packets
+    packet_stack = package_payload(payload)
+
+    print(len(packet_stack))
 
     return
+
+def read_file():
+    #3,460 b?
+    filename = input("Enter the filename of the document you wish to send: ")
+
+    try:
+        with open(filename, 'rb') as f:
+            return f.read()
+    except OSError as e:
+        print("File not found in working directory!\n" + e)
+        return None
+
+def package_payload(payload):
+    # We split up the payload into packets with packet size, while keeping track of the
+    # sequence number and the data to turn into a packet
+    packets = []
+    packet_data = []
+    seq_num = 1
+
+    for i in range(len(payload)):
+        if (i + 1) % PACKET_SIZE == 0:
+            packets.append(packet.make(seq_num, bytes(packet_data)))
+            packet_data = []
+            seq_num = i + 1
+        else:
+            packet_data.append(payload[i])
+
+    # Data may not be a multiple of packet size, therefore we must send remaining data 
+    # into a packet with the stored sequence number
+    if len(packet_data) > 0:
+        packets.append(packet.make(seq_num, bytes(packet_data)))
+
+    return packets
+
 
 # Receive thread for stop-n-wait
 def receive_snw(sock, pkt):
@@ -70,9 +117,11 @@ if __name__ == '__main__':
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(SENDER_ADDR)
 
-    # filename = sys.argv[1]
-
-    send_snw(sock)
+    send_gbn(sock)
     sock.close()
+
+    # # filename = sys.argv[1]
+    # send_snw(sock)
+    # sock.close()
 
 
