@@ -44,66 +44,104 @@ def send_snw(sock):
     pkt = packet.make(seq, "END".encode())
     udt.send(pkt, sock, RECEIVER_ADDR)
 
-# Send using GBN protocol
-def send_gbn(sock):
-    # [0, base-1] corresponds to packets already ACK'd
-    # [base, nextseqnum-1] corresponds to packets sent, not ACK'd
-    # [nextseqnum, base+N-1] corresponds to packets than can be sent immediately
-    # [base + N, ->] corresponds to packets that can't be sent until packed @ base is ACK'd
-    # [0, (2 ** k) - 1] corresponds to range of sequence numbers
-    global base
-    global timer
-    global mutex
+# # Send using GBN protocol
+# def send_gbn(sock):
+#     # [0, base-1] corresponds to packets already ACK'd
+#     # [base, nextseqnum-1] corresponds to packets sent, not ACK'd
+#     # [nextseqnum, base+N-1] corresponds to packets than can be sent immediately
+#     # [base + N, ->] corresponds to packets that can't be sent until packed @ base is ACK'd
+#     # [0, (2 ** k) - 1] corresponds to range of sequence numbers
+#     global base
+#     global timer
+#     global mutex
 
-    # We get payload as a byte array
-    try:
-        payload = read_file()
-    except FileNotFoundError:
-        print("File to send was not found. Data transfer terminated.")
-        return
+#     # We get payload as a byte array
+#     try:
+#         payload = read_file()
+#     except FileNotFoundError:
+#         print("File to send was not found. Data transfer terminated.")
+#         return
 
-    # We then convert payload into a queue of packets and initialize our seq_num pointer
-    packet_queue = package_payload(payload)
-    nextseqnum = 0
+#     # We then convert payload into a queue of packets and initialize our seq_num pointer
+#     packet_queue = package_payload(payload)
+#     nextseqnum = 0
 
-    # Send packets while there are packets to send
-    while base < len(packet_queue):  
-        reset = False
+#     # Send packets while there are packets to send
+#     while base < len(packet_queue):  
+#         reset = False
 
-        if timer.timeout():
-            nextseqnum = base
-            timer.stop()
-            reset = True
+#         if timer.timeout():
+#             nextseqnum = base
+#             timer.stop()
+#             reset = True
 
-        if nextseqnum < base + WINDOW_SIZE and nextseqnum < len(packet_queue):
-            print("Base {}. Sending {}".format(base, nextseqnum))
+#         if nextseqnum < base + WINDOW_SIZE and nextseqnum < len(packet_queue):
+#             print("Base {}. Sending {}".format(base, nextseqnum))
             
-            udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
+#             udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
 
-            if nextseqnum == base or reset:
-                timer.start()
-                reset = False
+#             if nextseqnum == base or reset:
+#                 timer.start()
+#                 reset = False
             
-            nextseqnum += 1
+#             nextseqnum += 1
 
-    # Signals recieving thread to stop
-    mutex.acquire()
-    try:
-        base = -1
-    finally:
-        mutex.release()
+#     # Signals recieving thread to stop
+#     mutex.acquire()
+#     try:
+#         base = -1
+#     finally:
+#         mutex.release()
 
-    # Send packet with FIN to signal end of transmission to receiver
-    time.sleep(SLEEP_INTERVAL * 10)
-    udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
+#     # Send packet with FIN to signal end of transmission to receiver
+#     time.sleep(SLEEP_INTERVAL * 10)
+#     udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
 
-    print("File sent successfully.")
+#     print("File sent successfully.")
+#     return
+
+# Receive thread for stop-n-wait
+def receive_snw(sock, pkt):
+    # Fill here to handle acks
     return
 
-# Reads file in working directory as bytes
-def read_file():
-    filename = input("Enter the filename of the document you wish to send: ")
+# Receive thread for GBN
+# def receive_gbn(sock):
+#     global base
+#     global timer
+#     global mutex
 
+#     acks = []
+
+#     while base > -1:
+#         # If timer for current base times out, request packets starting from base again
+#         p, addr = udt.recv(sock)
+
+#         # Make sure packet is from receiver
+#         if addr == RECEIVER_ADDR:
+#             seq_num, payload = packet.extract(p)
+            
+#             print("Expecting {}. Received {}".format(base, seq_num))
+            
+#             # If we have not acked a packet before, then add to acks. Otherwise ignore.
+#             if (seq_num not in acks) and payload.decode() == 'ACK':
+#                 acks.append(seq_num)
+
+#         # If base packet is acked, then we increment base and begin timer for new base.
+#         if base in acks:
+#             # print("Moving base {}\n".format(base))
+#             mutex.acquire()
+#             try:
+#                 base += 1
+#                 timer.stop()
+#                 timer.start()
+#             finally:
+#                 mutex.release()
+    
+#     return
+
+# Reads file in working directory as bytes
+def read_file(filename):
     try:
         with open(filename, 'rb') as f:
             return f.read()
@@ -134,59 +172,73 @@ def package_payload(payload):
 
     return packets
 
-# Receive thread for stop-n-wait
-def receive_snw(sock, pkt):
-    # Fill here to handle acks
-    return
-
-# Receive thread for GBN
-def receive_gbn(sock):
+def send(sock):
     global base
     global timer
     global mutex
 
-    acks = []
+    try:
+        payload = read_file(sys.argv[1])
+    except FileNotFoundError:
+        print("File to send was not found. Data transfer terminated.")
+        return
 
-    while base > -1:
-        # If timer for current base times out, request packets starting from base again
-        p, addr = udt.recv(sock)
+    packets = package_payload(payload)
+    nextseqnum = -1
 
-        # Make sure packet is from receiver
-        if addr == RECEIVER_ADDR:
-            seq_num, payload = packet.extract(p)
-            
-            print("Expecting {}. Received {}".format(base, seq_num))
-            
-            # If we have not acked a packet before, then add to acks. Otherwise ignore.
-            if (seq_num not in acks) and payload.decode() == 'ACK':
-                acks.append(seq_num)
+    _thread.start_new_thread(receive, (sock,))
 
-        # If base packet is acked, then we increment base and begin timer for new base.
-        if base in acks:
-            # print("Moving base {}\n".format(base))
-            mutex.acquire()
-            try:
-                base += 1
+    while base < len(packets):
+        if timer.timeout():
+            nextseqnum = base - 1
+            with mutex:
                 timer.stop()
                 timer.start()
-            finally:
-                mutex.release()
+
+        if nextseqnum < (base + WINDOW_SIZE - 1) and nextseqnum < len(packets) - 1:
+            with mutex:
+                udt.send(packets[nextseqnum + 1], sock, RECEIVER_ADDR)
+                time.sleep(SLEEP_INTERVAL)
+
+                nextseqnum += 1
+                print("Sent packet {}:".format(nextseqnum))
+                
+                if nextseqnum == base:
+                    timer.start()
     
-    return
+    print("File sent successfully.")
+    
+    with mutex:
+        base = -1
+        udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
+
+def receive(sock):
+    global base
+    global timer
+    global mutex
+
+    while base > -1:
+        ack, addr = udt.recv(sock)
+
+        with mutex:
+            if addr == RECEIVER_ADDR:
+                seqnum, payload = packet.extract(ack)
+                
+                if seqnum == base and payload == b'ACK':
+                    base += 1
+                    timer.stop()
+                    timer.start()
 
 # Main function
 if __name__ == '__main__':
-    # if len(sys.argv) != 2:
-    #     print('Expected filename as command line argument')
-    #     exit()
+    if len(sys.argv) != 2:
+        print('Expected filename as command line argument')
+        exit()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(SENDER_ADDR)
-
-    # Begin thread listening for ACKs
-    _thread.start_new_thread(receive_gbn, (sock,))
     
-    send_gbn(sock)
+    send(sock)
     sock.close()
 
     # # filename = sys.argv[1]
