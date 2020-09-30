@@ -8,27 +8,27 @@ RECEIVER_ADDR = ('localhost', 8080)
 
 # Receive packets from the sender w/ GBN protocol
 def receive_gbn(sock):
-    expected = 0
-    packets = {}
+    previous = -1
+    packets = []
     
     while True:
         p, addr = udt.recv(sock)
         seq_num, payload = packet.extract(p)
 
-        print("Expecting {}. Received {}".format(expected, seq_num))
-        
-        if seq_num == -1 and payload.decode() == 'FIN':
+        print("Received packet: {}".format(seq_num))
+
+        if seq_num == -1 and payload == b'FIN':
             break
 
-        if seq_num == expected:
-            udt.send(packet.make(expected, b'ACK'), sock, addr)
-            print("ACKING {}".format(expected))
-            packets[str(seq_num)] = payload
-            expected += 1
+        if seq_num == previous + 1:
+            udt.send(packet.make(seq_num, b'ACK'), sock, addr)
+            print("Acked packet: {}\n".format(seq_num))
+            packets.append((seq_num, payload))
+            previous += 1
         else:
-            if str(seq_num) in packets:
-                print("RE-ACKING {}".format(seq_num))
-                udt.send(packet.make(seq_num, b'ACK'), sock, addr)
+            if len(packets) > 0:
+                udt.send(packet.make(packets[-1][0], b'ACK'), sock, addr) 
+                print("Re-acked packet: {}\n".format(packets[-1][0]))
 
     return packets
 

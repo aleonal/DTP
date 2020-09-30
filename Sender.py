@@ -172,62 +172,69 @@ def package_payload(payload):
 
     return packets
 
-def send(sock):
+def send(sock, filename):
     global base
     global timer
     global mutex
 
     try:
-        payload = read_file(sys.argv[1])
-    except FileNotFoundError:
-        print("File to send was not found. Data transfer terminated.")
-        return
+        try:
+            payload = read_file(filename)
+        except FileNotFoundError:
+            print("File to send was not found. Data transfer terminated.")
+            return
 
-    packets = package_payload(payload)
-    nextseqnum = -1
+        packets = package_payload(payload)
+        nextseqnum = 0
 
-    _thread.start_new_thread(receive, (sock,))
+        _thread.start_new_thread(receive, (sock,))
 
-    while base < len(packets):
-        if timer.timeout():
-            nextseqnum = base - 1
+        while base < len(packets):
             with mutex:
-                timer.stop()
-                timer.start()
+                if timer.timeout() or not timer.running():
+                    print("Packet timed out. Resetting window at base {}\n".format(base))
+                    nextseqnum = base
+                    timer.stop()
 
-        if nextseqnum < (base + WINDOW_SIZE - 1) and nextseqnum < len(packets) - 1:
-            with mutex:
-                udt.send(packets[nextseqnum + 1], sock, RECEIVER_ADDR)
-                time.sleep(SLEEP_INTERVAL)
+            if (nextseqnum < base + WINDOW_SIZE) and (nextseqnum < len(packets)):
+                with mutex:
+                    udt.send(packets[nextseqnum], sock, RECEIVER_ADDR)
+                    print("Sent packet: {}\n".format(nextseqnum))
+                    
+                    if nextseqnum == base:
+                        timer.start()
+                    
+                    nextseqnum += 1
+        
+        print("File sent successfully")
+        udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
 
-                nextseqnum += 1
-                print("Sent packet {}:".format(nextseqnum))
-                
-                if nextseqnum == base:
-                    timer.start()
-    
-    print("File sent successfully.")
-    
-    with mutex:
-        base = -1
-        udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
+    except ConnectionResetError as e:
+        mutex.release()
+        print(e)
 
 def receive(sock):
     global base
     global timer
     global mutex
 
-    while base > -1:
-        ack, addr = udt.recv(sock)
+    try:
+        while True:
+            ack, addr = udt.recv(sock)
 
-        with mutex:
-            if addr == RECEIVER_ADDR:
-                seqnum, payload = packet.extract(ack)
+            with mutex:
+                if addr == RECEIVER_ADDR:
+                    seqnum, payload = packet.extract(ack)
+                    
+                    if seqnum >= base and payload == b'ACK':
+                        base = seqnum + 1
+                        timer.stop()
+         
+    except ConnectionError as e:
+        mutex.release()
+        print(e)
+
                 
-                if seqnum == base and payload == b'ACK':
-                    base += 1
-                    timer.stop()
-                    timer.start()
 
 # Main function
 if __name__ == '__main__':
@@ -238,9 +245,10 @@ if __name__ == '__main__':
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(SENDER_ADDR)
     
-    send(sock)
+    filename = sys.argv[1]
+
+    send(sock, filename)
     sock.close()
 
-    # # filename = sys.argv[1]
     # send_snw(sock)
     # sock.close()
