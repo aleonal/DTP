@@ -6,7 +6,6 @@ import udt
 
 RECEIVER_ADDR = ('localhost', 8080)
 
-file_data = []
 
 # Receive packets from the sender w/ GBN protocol
 def receive_gbn(sock):
@@ -22,37 +21,38 @@ def receive_sr(sock, windowsize):
 
 # Receive packets from the sender w/ Stop-n-wait protocol
 def receive_snw(sock):
-    global file_data
-    endStr = ''
-    while endStr!='END':
-        #while True: 
-        pkt, senderaddr = udt.recv(sock)
-        seq, data = packet.extract(pkt)
-        if seq == len(file_data):
-            if data.decode() != 'END':
-                file_data.append(data)
-        endStr = data.decode()
-        print("From: ", senderaddr, ", Seq# ", seq, endStr)
-        #send acknowledgment packet
-        pkt = packet.make(seq, "ACK".encode())
-        udt.send(pkt, sock, senderaddr)
-       
+    file_data = []
+    seq_num = 0
+    while seq_num > -1:
+        p, addr = udt.recv(sock)
+        seq_num, payload = packet.extract(p)
 
+        print("Received packet: {}".format(seq_num))
+
+        #if seq_num == -1:
+        #    break
+
+        udt.send(packet.make(seq_num, b'ACK'), sock, addr)
+        print("Acked packet: {}\n".format(seq_num))
+        if seq_num > len(file_data) - 1:
+            file_data.append(payload)
+                    
+    return file_data
 
 # Main function
 if __name__ == '__main__':
-    # if len(sys.argv) != 2:
-    #     print('Expected filename as command line argument')
-    #     exit()
+    if len(sys.argv) != 2:
+        print('Expected filename as command line argument')
+        exit()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(RECEIVER_ADDR)
-    # filename = sys.argv[1]
-    receive_snw(sock)
+    filename = sys.argv[1]
+    file_data = receive_snw(sock)
     print(file_data)
-    file = open("CS5313\\Homework 2\\receiver_bio.txt", "wb")
+    file = open(filename, "wb")
     for i in range(len(file_data)):
-         file.write(file_data[i])
+        file.write(file_data[i])
     file.close()
     # Close the socket
     sock.close()
