@@ -10,8 +10,12 @@ from timer import Timer
 
 # Some already defined parameters
 PACKET_SIZE = 512
+
+# Changed 'localhost' to IP address, since replies are not automatically translated back to
+# localhost
 RECEIVER_ADDR = ('127.0.0.1', 8080)
 SENDER_ADDR = ('127.0.0.1', 9090)
+
 SLEEP_INTERVAL = 0.05 # (In seconds)
 TIMEOUT_INTERVAL = 0.5
 WINDOW_SIZE = 4
@@ -44,135 +48,8 @@ def send_snw(sock):
     pkt = packet.make(seq, "END".encode())
     udt.send(pkt, sock, RECEIVER_ADDR)
 
-# # Send using GBN protocol
-# def send_gbn(sock):
-#     # [0, base-1] corresponds to packets already ACK'd
-#     # [base, nextseqnum-1] corresponds to packets sent, not ACK'd
-#     # [nextseqnum, base+N-1] corresponds to packets than can be sent immediately
-#     # [base + N, ->] corresponds to packets that can't be sent until packed @ base is ACK'd
-#     # [0, (2 ** k) - 1] corresponds to range of sequence numbers
-#     global base
-#     global timer
-#     global mutex
-
-#     # We get payload as a byte array
-#     try:
-#         payload = read_file()
-#     except FileNotFoundError:
-#         print("File to send was not found. Data transfer terminated.")
-#         return
-
-#     # We then convert payload into a queue of packets and initialize our seq_num pointer
-#     packet_queue = package_payload(payload)
-#     nextseqnum = 0
-
-#     # Send packets while there are packets to send
-#     while base < len(packet_queue):  
-#         reset = False
-
-#         if timer.timeout():
-#             nextseqnum = base
-#             timer.stop()
-#             reset = True
-
-#         if nextseqnum < base + WINDOW_SIZE and nextseqnum < len(packet_queue):
-#             print("Base {}. Sending {}".format(base, nextseqnum))
-            
-#             udt.send(packet_queue[nextseqnum], sock, RECEIVER_ADDR)
-
-#             if nextseqnum == base or reset:
-#                 timer.start()
-#                 reset = False
-            
-#             nextseqnum += 1
-
-#     # Signals recieving thread to stop
-#     mutex.acquire()
-#     try:
-#         base = -1
-#     finally:
-#         mutex.release()
-
-#     # Send packet with FIN to signal end of transmission to receiver
-#     time.sleep(SLEEP_INTERVAL * 10)
-#     udt.send(packet.make(base, b'FIN'), sock, RECEIVER_ADDR)
-
-#     print("File sent successfully.")
-#     return
-
-# Receive thread for stop-n-wait
-def receive_snw(sock, pkt):
-    # Fill here to handle acks
-    return
-
-# Receive thread for GBN
-# def receive_gbn(sock):
-#     global base
-#     global timer
-#     global mutex
-
-#     acks = []
-
-#     while base > -1:
-#         # If timer for current base times out, request packets starting from base again
-#         p, addr = udt.recv(sock)
-
-#         # Make sure packet is from receiver
-#         if addr == RECEIVER_ADDR:
-#             seq_num, payload = packet.extract(p)
-            
-#             print("Expecting {}. Received {}".format(base, seq_num))
-            
-#             # If we have not acked a packet before, then add to acks. Otherwise ignore.
-#             if (seq_num not in acks) and payload.decode() == 'ACK':
-#                 acks.append(seq_num)
-
-#         # If base packet is acked, then we increment base and begin timer for new base.
-#         if base in acks:
-#             # print("Moving base {}\n".format(base))
-#             mutex.acquire()
-#             try:
-#                 base += 1
-#                 timer.stop()
-#                 timer.start()
-#             finally:
-#                 mutex.release()
-    
-#     return
-
-# Reads file in working directory as bytes
-def read_file(filename):
-    try:
-        with open(filename, 'rb') as f:
-            return f.read()
-    except OSError as e:
-        raise FileNotFoundError(e)
-
-# Given a payload, it returns the payload as a stack of packets ready to send using a
-# framed mechanism
-def package_payload(payload):
-    # We split up the payload into packets with packet size, while keeping track of the
-    # sequence number and the data to turn into a packet
-    packets = []
-    packet_data = []
-    seq_num = 0
-
-    for i in range(len(payload)):
-        if (i + 1) % PACKET_SIZE == 0:
-            packets.append(packet.make(seq_num, bytes(packet_data)))
-            packet_data = []
-            seq_num += 1
-        else:
-            packet_data.append(payload[i])
-
-    # Data may not be a multiple of packet size, therefore we must send remaining data 
-    # into a packet with the stored sequence number
-    if len(packet_data) > 0:
-        packets.append(packet.make(seq_num, bytes(packet_data)))
-
-    return packets
-
-def send(sock, filename):
+# Send using GBN protocol
+def send_gbn(sock, filename):
     global base
     global timer
     global mutex
@@ -187,17 +64,15 @@ def send(sock, filename):
         packets = package_payload(payload)
         nextseqnum = 0
 
-        _thread.start_new_thread(receive, (sock,))
+        _thread.start_new_thread(receive_gbn, (sock,))
 
         while base < len(packets):
             with mutex:
                 if timer.timeout() or not timer.running():
-                    print("Packet timed out. Resetting window at base {}\n".format(base))
                     nextseqnum = base
                     timer.stop()
 
             if (nextseqnum < base + WINDOW_SIZE) and (nextseqnum < len(packets)):
-                with mutex:
                     udt.send(packets[nextseqnum], sock, RECEIVER_ADDR)
                     print("Sent packet: {}\n".format(nextseqnum))
                     
@@ -205,15 +80,32 @@ def send(sock, filename):
                         timer.start()
                     
                     nextseqnum += 1
-        
-        print("File sent successfully")
+    except ConnectionError:
+        print("Connection failed.")
+        return
+
+    # Move receiving thread to closing procedure
+    with mutex:
+        timer.start()
+
+    while timer.running():
+        udt.send(packet.make(-1, b'FIN'), sock, SENDER_ADDR)
+        time.sleep(SLEEP_INTERVAL)
+    
+    with mutex:
+        timer.start()
+
+    # non-blocking signal 
+    while timer.running():
         udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
 
-    except ConnectionResetError as e:
-        mutex.release()
-        print(e)
+# Receive thread for stop-n-wait
+def receive_snw(sock, pkt):
+    # Fill here to handle acks
+    return
 
-def receive(sock):
+# Receive thread for GBN
+def receive_gbn(sock):
     global base
     global timer
     global mutex
@@ -221,20 +113,67 @@ def receive(sock):
     try:
         while True:
             ack, addr = udt.recv(sock)
-
             with mutex:
-                if addr == RECEIVER_ADDR:
+                if addr == RECEIVER_ADDR or addr == SENDER_ADDR:
                     seqnum, payload = packet.extract(ack)
+
+                    if addr == SENDER_ADDR and payload == b'FIN':
+                        print("File sent successfully.\n\nClosing connection...\n")
+                        timer.stop()
+                        break
                     
                     if seqnum >= base and payload == b'ACK':
                         base = seqnum + 1
                         timer.stop()
-         
     except ConnectionError as e:
-        mutex.release()
         print(e)
 
-                
+    # Procedure to close thread and signal other process
+    try:
+        while True:
+            waste = udt.recv(sock)
+    except ConnectionError as e:
+        with mutex:
+            timer.stop()
+    
+    print("Connection closed successfully.")
+            
+
+# Reads file at given directory as bytes
+def read_file(filename):
+    try:
+        with open(filename, 'rb') as f:
+            return f.read()
+    except OSError as e:
+        raise FileNotFoundError(e)
+
+# Given a payload, it returns the payload as a stack of packets ready to send using a
+# framed mechanism, with the first packet signaling the total amount of packets to be sent,
+# excluding this header
+def package_payload(payload):
+    # We split up the payload into packets with packet size, while keeping track of the
+    # sequence number and the data to turn into a packet
+    packets = []
+    packet_data = []
+    seq_num = 1
+
+    for i in range(len(payload)):
+        if (i + 1) % PACKET_SIZE == 0:
+            packets.append(packet.make(seq_num, bytes(packet_data)))
+            packet_data = []
+            seq_num += 1
+        else:
+            packet_data.append(payload[i])
+
+    # Data may not be a multiple of packet size, therefore we must send remaining data 
+    # into a packet with the stored sequence number
+    if len(packet_data) > 0:
+        packets.append(packet.make(seq_num, bytes(packet_data)))
+
+    # Prepend a header packet that lets the recipient know how many packets to expect
+    packets = [packet.make(0, str(len(packets)).encode())] + packets
+
+    return packets       
 
 # Main function
 if __name__ == '__main__':
@@ -247,8 +186,7 @@ if __name__ == '__main__':
     
     filename = sys.argv[1]
 
-    send(sock, filename)
-    sock.close()
+    send_gbn(sock, filename)
 
     # send_snw(sock)
     # sock.close()

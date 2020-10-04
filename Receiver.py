@@ -9,29 +9,39 @@ RECEIVER_ADDR = ('localhost', 8080)
 # Receive packets from the sender w/ GBN protocol
 def receive_gbn(sock):
     previous = -1
+    payload_length = None
     packets = []
+    addr_connection = None
     
     while True:
-        p, addr = udt.recv(sock)
-        seq_num, payload = packet.extract(p)
+        if previous == payload_length:
+            print("File transfer was successful, closing connection.")
+        try:
+            p, addr = udt.recv(sock)
+            seq_num, payload = packet.extract(p)
+            print("Received packet: {}".format(seq_num))
 
-        print("Received packet: {}".format(seq_num))
+            if addr_connection == None and seq_num == 0:
+                payload_length = int(payload.decode())
+                addr_connection = addr
 
-        if seq_num == -1 and payload == b'FIN':
-            break
+            if addr == addr_connection:
+                if seq_num == -1 and payload == b'FIN':
+                    print("Connection closed successfully")
+                    return packets
 
-        if seq_num == previous + 1:
-            udt.send(packet.make(seq_num, b'ACK'), sock, addr)
-            print("Acked packet: {}\n".format(seq_num))
-            packets.append((seq_num, payload))
-            previous += 1
-        else:
-            if len(packets) > 0:
-                udt.send(packet.make(packets[-1][0], b'ACK'), sock, addr) 
-                print("Re-acked packet: {}\n".format(packets[-1][0]))
-
-    return packets
-
+                if seq_num == previous + 1:
+                    udt.send(packet.make(seq_num, b'ACK'), sock, addr)
+                    print("Acked packet: {}\n".format(seq_num))
+                    packets.append((seq_num, payload))
+                    previous += 1
+                else:
+                    if len(packets) > 0:
+                        udt.send(packet.make(packets[-1][0], b'ACK'), sock, addr) 
+                        print("Re-acked packet: {}\n".format(packets[-1][0]))
+        
+        except ConnectionError as e:
+            print(e)
 
 # Receive packets from the sender w/ SR protocol
 def receive_sr(sock, windowsize):
@@ -58,9 +68,9 @@ if __name__ == '__main__':
 
     print("Waiting for data...")
     p = receive_gbn(sock)
-    for b in p:
-        print("{}\n\n".format(b))
+    sock.close()
 
+    print(p)
     # filename = sys.argv[1]
     # receive_snw(sock)
     #sock.close()
