@@ -24,6 +24,8 @@ WINDOW_SIZE = 4
 base = 0
 mutex = _thread.allocate_lock()
 timer = Timer(TIMEOUT_INTERVAL)
+total_packets = 0
+file_data = []
 
 # Need to have two threads: one for sending and another for receiving ACKs
 
@@ -36,17 +38,46 @@ def generate_payload(length=10):
 
 # Send using Stop_n_wait protocol
 def send_snw(sock):
-	# Fill out the code here
-    seq = 0
-    while(seq < 20):
-        data = generate_payload(40).encode()
-        pkt = packet.make(seq, data)
-        print("Sending seq# ", seq, "\n")
-        udt.send(pkt, sock, RECEIVER_ADDR)
-        seq = seq+1
-        time.sleep(TIMEOUT_INTERVAL)
-    pkt = packet.make(seq, "END".encode())
-    udt.send(pkt, sock, RECEIVER_ADDR)
+    # Fill out the code here
+    global base
+    global timer
+    global mutex
+    try:
+        try:
+            payload = read_file(filename)
+        except FileNotFoundError:
+            print("File to send was not found. Data transfer terminated.")
+            return
+
+        packets = package_payload(payload)
+        nextseqnum = 0
+
+        _thread.start_new_thread(receive_snw, (sock, packets[len(packets)-1],))
+
+        while base < len(packets)-1:
+            with mutex:
+                if timer.timeout():
+                    timer.stop()
+                    print("Packet timed out. Resending packet")
+                    udt.send(packets[base], sock, RECEIVER_ADDR)
+                    print("Sent packet: {}\n".format(base))
+                    timer.start()
+                    #nextseqnum = base
+                    
+                elif not timer.running():
+                    udt.send(packets[base], sock, RECEIVER_ADDR)
+                    print("Sent packet: {}\n".format(base))
+                    timer.start()
+                    #nextseqnum += 1                    
+                #else:
+                #    print("packet is "+base)
+        print("File sent succesfully")
+        while base != -1:
+            udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
+            time.sleep(TIMEOUT_INTERVAL)
+    except ConnectionResetError as e:
+        mutex.release()
+        print(e)
 
 # Send using GBN protocol
 def send_gbn(sock, filename):
@@ -102,7 +133,26 @@ def send_gbn(sock, filename):
 # Receive thread for stop-n-wait
 def receive_snw(sock, pkt):
     # Fill here to handle acks
-    return
+    global base
+    global timer
+    global mutex
+    ackedpackets = 0
+    try:
+        fseqnum, fpayload = packet.extract(pkt)
+        while ackedpackets < fseqnum+1:
+            ack, addr = udt.recv(sock)
+            ackedpackets+=1
+
+            with mutex:
+                
+                seqnum, payload = packet.extract(ack)
+                base = seqnum + 1
+                
+                timer.stop()
+
+    except ConnectionError as e:
+        #mutex.release()
+        print(e)
 
 # Receive thread for GBN
 def receive_gbn(sock):
@@ -136,8 +186,7 @@ def receive_gbn(sock):
         with mutex:
             timer.stop()
     
-    print("Connection closed successfully.")
-            
+    print("Connection closed successfully.") 
 
 # Reads file at given directory as bytes
 def read_file(filename):
@@ -187,6 +236,6 @@ if __name__ == '__main__':
     filename = sys.argv[1]
 
     send_gbn(sock, filename)
-
     # send_snw(sock)
-    # sock.close()
+    
+    sock.close()
