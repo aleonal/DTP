@@ -59,6 +59,7 @@ def receive_sr(sock, windowsize):
 
 # Receive packets from the sender w/ Stop-n-wait protocol
 def receive_snw(sock):
+    #file_data will hold the packet data
     file_data = []
     seq_num = 0
     while seq_num > -1:
