@@ -51,27 +51,41 @@ def send_snw(sock):
 
         packets = package_payload(payload)
         nextseqnum = 0
-
+  # start another thread to receive the ACKs from Receiver.py
         _thread.start_new_thread(receive_snw, (sock, packets[len(packets)-1],))
-
+#loop to send packets starting at 0
         while base < len(packets)-1:
+            # use mutex to prevent base from changing values by receive_snw mid-loop
             with mutex:
+                #check to see if the timer has timed out.  this means ACK wasn't received
+                # and the packet needs to be resent, and the timer restarted
+              
                 if timer.timeout():
                     timer.stop()
                     print("Packet timed out. Resending packet")
                     udt.send(packets[base], sock, RECEIVER_ADDR)
                     print("Sent packet: {}\n".format(base))
                     timer.start()
-                    #nextseqnum = base
-                    
+                    #nextseqnum = base  (leftover debugging code)
+                # the else means the timer has not timed out, so 
+                #check to see if a timer is NOT running
+                # this means a packet is being sent for the first time
+                # the time is started
+                
                 elif not timer.running():
                     udt.send(packets[base], sock, RECEIVER_ADDR)
                     print("Sent packet: {}\n".format(base))
                     timer.start()
-                    #nextseqnum += 1                    
-                #else:
+                    # the following 3 lines are not needed because the only case left is that the timer is running. no action is needed while waiting for the ACK
+                    #nextseqnum += 1 (leftover debugging code)                   
+                #else: 
                 #    print("packet is "+base)
+                
+         #after the loop exits, the file has been sent
         print("File sent succesfully")
+        
+        #now send a packet indicating that this is the last packet, with a sequence number of -1
+        # continue sending it until receive_snw gets the ACK packet and updates base to the new value
         while base != -1:
             udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
             time.sleep(TIMEOUT_INTERVAL)
@@ -132,22 +146,32 @@ def send_gbn(sock, filename):
 
 # Receive thread for stop-n-wait
 def receive_snw(sock, pkt):
-    # Fill here to handle acks
+   
     global base
     global timer
     global mutex
     ackedpackets = 0
+    #use try in case of connection error
     try:
+        #get the sequence number and payload from the packet passed in as a parameter
+        #this contains the final sequence number and payload data in that packet
         fseqnum, fpayload = packet.extract(pkt)
+        
+        #ackedpacket is counting the total ACKS from Receiver.py
+        #this loop runs until an ACK is received that is one number higher
+        #than previously received because there is one final packet sent
+        #when the payload packets are done
         while ackedpackets < fseqnum+1:
+            # unpack the ack packet received and increment ackpackets counter
             ack, addr = udt.recv(sock)
             ackedpackets+=1
 
             with mutex:
-                
+                #unpack the seqnum and payload and update base so send_snw
+                #knows to send the next packet in the sequence
                 seqnum, payload = packet.extract(ack)
                 base = seqnum + 1
-                
+                #stop the timer because ACK was successfully reeived
                 timer.stop()
 
     except ConnectionError as e:
