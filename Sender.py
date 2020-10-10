@@ -86,9 +86,16 @@ def send_snw(sock):
         
         #now send a packet indicating that this is the last packet, with a sequence number of -1
         # continue sending it until receive_snw gets the ACK packet and updates base to the new value
-        while base != -1:
-            udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
-            time.sleep(TIMEOUT_INTERVAL)
+        with mutex:
+            if timer.running():
+                timer.stop()
+            timer.start()
+            while not timer.timeout():
+                if base != -1:
+                    udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
+                    #time.sleep(TIMEOUT_INTERVAL)
+                else:
+                    return    
     except ConnectionResetError as e:
         mutex.release()
         print(e)
