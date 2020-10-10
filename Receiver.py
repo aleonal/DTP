@@ -9,20 +9,16 @@ RECEIVER_ADDR = ('localhost', 8080)
 # Receive packets from the sender w/ GBN protocol
 def receive_gbn(sock):
     previous = -1
-    payload_length = None
     packets = []
     addr_connection = None
     
     while True:
-        if previous == payload_length:
-            print("File transfer was successful, closing connection.")
         try:
             p, addr = udt.recv(sock)
             seq_num, payload = packet.extract(p)
 
             # If this is a new connection, save address and store expected payload length
             if addr_connection == None and seq_num == 0:
-                payload_length = int(payload)
                 addr_connection = addr
 
             # if packet received was from the expected sender...
@@ -30,7 +26,7 @@ def receive_gbn(sock):
 
                 # if packet signals end of transmission, stop listening for packets
                 if seq_num == -1 and payload == b'FIN':
-                    print("Connection closed successfully")
+                    print("File received successfully.")
                     break
                 
                 # if sequence number is what we're expecting, send an ack and append packet contents to packet stack

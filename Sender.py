@@ -227,26 +227,19 @@ def package_payload(payload):
     # We split up the payload into packets with packet size, while keeping track of the
     # sequence number and the data to turn into a packet
     packets = []
-    packet_data = []
-    seq_num = 1
+    packet_data = b''
+    seq_num = 0
 
     for i in range(len(payload)):
-        if (i + 1) % PACKET_SIZE == 0:
-            packets.append(packet.make(seq_num, bytes(packet_data)))
-            packet_data = []
+        packet_data = packet_data + payload[i:i+1]
+        if len(packet_data) == PACKET_SIZE:
+            packets.append(packet.make(seq_num, packet_data))
+            packet_data = b''
             seq_num += 1
-        else:
-            packet_data.append(payload[i])
-
-    # Data may not be a multiple of packet size, therefore we must send remaining data 
-    # into a packet with the stored sequence number
     if len(packet_data) > 0:
-        packets.append(packet.make(seq_num, bytes(packet_data)))
-
-    # Prepend a header packet that lets the recipient know how many packets to expect
-    packets = [packet.make(0, str(len(packets)).encode())] + packets
-
-    return packets       
+        packets.append(packet.make(seq_num, packet_data))
+    
+    return packets  
 
 # Main function
 if __name__ == '__main__':
