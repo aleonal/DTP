@@ -106,24 +106,41 @@ def send_gbn(sock, filename):
     global timer
     global mutex
 
+    # The sending mechanism is within a try-catch block in order to
+    # catch any connection that is closed unexpectedly or that fails.
     try:
+
+        # We attempt to open up the file as our payload
         try:
             payload = read_file(filename)
         except FileNotFoundError:
             print("File to send was not found. Data transfer terminated.")
             return
 
+        # The payload is turned into packets and the first sequence number
+        # is initialized
         packets = package_payload(payload)
         nextseqnum = 0
 
+        # The auxiliary thread is begun. It will listen for ACKs from the
+        # recipient while this main thread sends the payload
         _thread.start_new_thread(receive_gbn, (sock,))
 
+        # Main loop. While we have packets to send, it will attempt to send
+        # packets. 
         while base < len(packets):
+
+            # Check if the timer has begun or if it has timed out. If so,
+            # set the next sequence number to be sent back to the base of
+            # the transmission window and stop the timer
             with mutex:
                 if timer.timeout() or not timer.running():
                     nextseqnum = base
                     timer.stop()
 
+            # If the sending window is not full, we send a packet. If the
+            # packet we're sending is at the base of the window, we start
+            # the timer to calculate a timeout
             if (nextseqnum < base + WINDOW_SIZE) and (nextseqnum < len(packets)):
                     udt.send(packets[nextseqnum], sock, RECEIVER_ADDR)
                     print("Sent packet: {}\n".format(nextseqnum))
@@ -136,18 +153,22 @@ def send_gbn(sock, filename):
         print("Connection failed.")
         return
 
-    # Move receiving thread to closing procedure
+    # Here, we begin the timer to be used by auxiliary thread to close the
+    # upcoming loop
     with mutex:
         timer.start()
 
+    # Signal auxiliary to stop listening for input from the recipient
     while timer.running():
         udt.send(packet.make(-1, b'FIN'), sock, SENDER_ADDR)
         time.sleep(SLEEP_INTERVAL)
     
+    # We begin the timer again to know when the auxiliary thread finished
+    # as a result of a closed connection
     with mutex:
         timer.start()
 
-    # non-blocking signal 
+    # non-blocking loop that sends FIN packets to the recipient
     while timer.running():
         udt.send(packet.make(-1, b'FIN'), sock, RECEIVER_ADDR)
 
@@ -191,33 +212,50 @@ def receive_gbn(sock):
     global timer
     global mutex
 
+    # We have to make sure the connection is active, so the receiving logic
+    # of the sender is within this try-catch block
     try:
         while True:
+
+            # We wait to receive a packet
             ack, addr = udt.recv(sock)
+
+            # To avoid race conditions with the sending mechanism, we use the mutex
             with mutex:
+
+                # If the address of the sender is from the recipient or ours,
+                # extract the data
                 if addr == RECEIVER_ADDR or addr == SENDER_ADDR:
                     seqnum, payload = packet.extract(ack)
 
+                    # If the packet is from us and the payload is FIN,
+                    # we signal the end of the receiving process to the main thread
+                    # and exit the listening loop
                     if addr == SENDER_ADDR and payload == b'FIN':
                         print("File sent successfully.\n\nClosing connection...\n")
                         timer.stop()
                         break
                     
+                    # If we receive an ACK for a packet in the window, move the
+                    # base up to the packet following the ACK's sequence number
                     if seqnum >= base and payload == b'ACK':
                         base = seqnum + 1
                         timer.stop()
     except ConnectionError as e:
         print(e)
 
-    # Procedure to close thread and signal other process
+    # Here, we can assume we already sent the file and are waiting for the
+    # client to close the connection. With a try-catch, we simply wait for the
+    # exception to happen, stop the time to signal the sender, and print
+    # that the connection was closed successfully
     try:
         while True:
             waste = udt.recv(sock)
     except ConnectionError as e:
         with mutex:
             timer.stop()
-    
-    print("Connection closed successfully.") 
+            print("Connection closed successfully.") 
+
 
 # Reads file at given directory as bytes
 def read_file(filename):

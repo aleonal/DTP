@@ -46,7 +46,7 @@ def receive_gbn(sock):
             return -1
 
     # because packet list contains sequence numbers, simply form a list 
-    return list(dict(packets).values())[1:]
+    return list(dict(packets).values())
 
 # Receive packets from the sender w/ SR protocol
 def receive_sr(sock, windowsize):
