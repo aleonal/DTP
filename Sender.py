@@ -143,7 +143,7 @@ def send_gbn(sock, filename):
             # the timer to calculate a timeout
             if (nextseqnum < base + WINDOW_SIZE) and (nextseqnum < len(packets)):
                     udt.send(packets[nextseqnum], sock, RECEIVER_ADDR)
-                    print("Sent packet: {}\n".format(nextseqnum))
+                    print("Sent packet: {}".format(nextseqnum))
                     
                     if nextseqnum == base:
                         timer.start()
@@ -232,7 +232,7 @@ def receive_gbn(sock):
                     # we signal the end of the receiving process to the main thread
                     # and exit the listening loop
                     if addr == SENDER_ADDR and payload == b'FIN':
-                        print("File sent successfully.\n\nClosing connection...\n")
+                        print("File sent successfully.\nClosing connection...")
                         timer.stop()
                         break
                     
